@@ -39,7 +39,7 @@ double distance(std::vector<coord> &positions, int i, int j) {
     );
 }
 
-ll find_circuits(std::vector<coord> &positions, int top_pairs = 1000) {
+std::pair<ll, ll> find_circuits(std::vector<coord> &positions, int top_pairs) {
     std::vector<std::pair<std::pair<int, int>, double>> pairs;
 
     for (size_t i = 0; i < positions.size() - 1; ++i) {
@@ -55,7 +55,9 @@ ll find_circuits(std::vector<coord> &positions, int top_pairs = 1000) {
         return a.second < b.second;
     });
 
-    pairs.resize(top_pairs);
+    // use -1 for part 2 to continue until the end
+    if (top_pairs > -1 && top_pairs < static_cast<int>(pairs.size()))
+        pairs.resize(top_pairs);
 
     std::vector<std::unordered_set<int>> circuits;
 
@@ -67,6 +69,7 @@ ll find_circuits(std::vector<coord> &positions, int top_pairs = 1000) {
 
     // we'll work with position indices now, denoted by a and b
     // distribute them in connected circuits
+    ll part2_res = 0;
     for (const auto &this_pair : pairs) {
 
         int ia = -1;
@@ -123,8 +126,12 @@ ll find_circuits(std::vector<coord> &positions, int top_pairs = 1000) {
         // }
         // std::cout << "===" << std::endl;
 
-    };
-
+        // stop when there is only one left and that it contains all positions
+        if (circuits.size() == 1 && circuits[0].size() == positions.size()) {
+            part2_res = positions[a][0] * positions[b][0];
+            break;
+        }
+    }
 
 
     std::vector<int> circuit_sizes;
@@ -138,14 +145,10 @@ ll find_circuits(std::vector<coord> &positions, int top_pairs = 1000) {
 
     circuit_sizes.resize(3);
     
-    std::string row;
-    for (const auto &el : circuit_sizes) {
-        row += std::to_string(el) + ", ";
-    }
-    std::cout << row << std::endl;
 
+    ll part1_res = 1LL * circuit_sizes[0] * circuit_sizes[1] * circuit_sizes[2];
 
-    return 1LL * circuit_sizes[0] * circuit_sizes[1] * circuit_sizes[2];
+    return {part1_res, part2_res};
 }
 
 int main(int argc, char *argv[])
@@ -160,7 +163,7 @@ int main(int argc, char *argv[])
         
         auto part1_start = std::chrono::high_resolution_clock::now();
 
-        ll part1_result = find_circuits(positions);
+        ll part1_result = find_circuits(positions, 1000).first;
         auto part1_end = std::chrono::high_resolution_clock::now();
 
         std::chrono::duration<double> part1_elapsed = part1_end - part1_start;
@@ -170,7 +173,7 @@ int main(int argc, char *argv[])
         // part 2
         auto part2_start = std::chrono::high_resolution_clock::now();
 
-        ll part2_result = 0;
+        ll part2_result = find_circuits(positions, -1).second;
 
         auto part2_end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> part2_elapsed = part2_end - part2_start;
