@@ -3,6 +3,7 @@
 #include <tuple>
 #include <vector>
 #include <numeric>
+#include <algorithm>
 #include <chrono>
 #include <unordered_set>
 #include "utils.h"
