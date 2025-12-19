@@ -132,7 +132,9 @@ public:
         std::vector<int> res = {current};
 
         auto [ended_remaining, res_remaining] = remaining_combination->next();
-        res.insert(res.end(), res_remaining.begin(), res_remaining.end());
+        for (auto &rem : res_remaining) {
+            res.push_back(rem);
+        }
 
         if (ended_remaining)
         {
@@ -301,35 +303,38 @@ public:
     }
 
     static std::pair<bool, std::vector<std::vector<int>>> joltage_search(
-        int schedule_position,
+        const int &schedule_position,
         std::vector<int> &schedule,
         std::vector<std::vector<int>> &indicator_to_buttons,
-        std::vector<int> constraints,
+        std::vector<int> &constraints,
         std::vector<int> &joltage,
-        std::vector<int> free_button_inds,
+        std::vector<std::vector<int>> &free_button_schedule,
         int &target_joltage)
     {
-        auto indicator = schedule[schedule_position];
-        auto buttons_inds = indicator_to_buttons[indicator];
+        auto free_button_inds = free_button_schedule[schedule_position];
 
         // std::cout << "Incoming constraints (indicator " + std::to_string(indicator) + "):" << std::endl;
         // aoc::print_vector(constraints);
         auto is_last_node = schedule_position == static_cast<int>(schedule.size()) - 1;
         if (is_last_node)
         {
+            auto res = constraints;
             for (auto &button_ind : free_button_inds)
             {
-                constraints[button_ind] = 0;
+                res[button_ind] = 0;
             }
             // we can freely distribute the unattributed_joltage to the remaining free buttons
             // assign all of it to the the first free button
             if (free_button_inds.size() > 0)
-                constraints[free_button_inds[0]] = target_joltage;
+                res[free_button_inds[0]] = target_joltage;
 
-            return {true, {constraints}};
+            return {true, {res}};
         }
 
         // we are not at the last node from here on
+
+        auto next_indicator = schedule[schedule_position + 1];
+        auto next_free_button_inds = free_button_schedule[schedule_position + 1];
 
         // collect all solutions
         std::vector<std::vector<int>> solutions = {};
@@ -343,13 +348,12 @@ public:
             auto [combinations_ended, combination] = combinations.next();
             loop_control = !combinations_ended;
 
-            std::vector<int> candidate_constraints = constraints;
+            auto candidate_constraints = constraints;
             for (size_t i = 0; i < free_button_inds.size(); ++i)
             {
                 candidate_constraints[free_button_inds[i]] = combination[i];
             }
 
-            auto next_indicator = schedule[schedule_position + 1];
             auto next_target_joltage = joltage[next_indicator];
             for (auto &button_ind : indicator_to_buttons[next_indicator])
             {
@@ -359,44 +363,35 @@ public:
                 }
             }
 
-            std::vector<int> next_free_button_inds;
-            auto next_buttons_inds = indicator_to_buttons[next_indicator];
-            for (auto &button_ind : next_buttons_inds)
-            {
-                // if has the special value of -1 it means it's unconstrained
-                if (candidate_constraints[button_ind] < 0)
-                {
-                    next_free_button_inds.push_back(button_ind);
-                }
+            // skip search if target is negative or no free button to satisfy a positive target
+            if ((next_target_joltage < 0) || (next_target_joltage > 0 && next_free_button_inds.size() == 0)) {
+                continue;
             }
 
-            if ((next_target_joltage > 0 && next_free_button_inds.size() > 0) || (next_target_joltage == 0))
+            // std::cout << "Candidate constraints (indicator " + std::to_string(indicator) + "):" << std::endl;
+            // aoc::print_vector(candidate_constraints);
+            auto [success, iteration_solutions] = joltage_search(
+                schedule_position + 1,
+                schedule,
+                indicator_to_buttons,
+                candidate_constraints,
+                joltage,
+                free_button_schedule,
+                next_target_joltage
+            );
+
+            if (success)
             {
-
-                // std::cout << "Candidate constraints (indicator " + std::to_string(indicator) + "):" << std::endl;
-                // aoc::print_vector(candidate_constraints);
-                auto [success, iteration_solutions] = joltage_search(
-                    schedule_position + 1,
-                    schedule,
-                    indicator_to_buttons,
-                    candidate_constraints,
-                    joltage,
-                    next_free_button_inds,
-                    next_target_joltage
-                );
-
-                if (success)
+                for (auto &solution : iteration_solutions)
                 {
-                    for (auto &solution : iteration_solutions)
-                    {
-                        solutions.push_back(solution);
-                        // std::cout << "solution found: " << std::endl;
-                        // aoc::print_vector(solution);
-                    }
-                    // return on first solution found
-                    break;
+                    solutions.push_back(solution);
+                    // std::cout << "solution found: " << std::endl;
+                    // aoc::print_vector(solution);
                 }
+                // return on first solution found
+                break;
             }
+
             // else {
             //     std::cout << "Surge! Preemptive check!" << std::endl;
             // }
@@ -451,7 +446,7 @@ public:
                   [&indicator_to_buttons](size_t i1, size_t i2)
                   { return indicator_to_buttons[i1].size() < indicator_to_buttons[i2].size(); });
 
-        // attempt to optimise the schedule so that the subsequent the indicator
+        // attempt to optimise the schedule so that the subsequent indicator
         // has the fewest new buttons with respect to constrained_buttons set
         std::unordered_set<int> constrained_buttons;
         for (size_t i = 0; i < schedule.size() - 1; ++i)
@@ -494,11 +489,36 @@ public:
             }
         }
 
+        // we can precompute what buttons will be free at every node (indicator)
+        std::vector<std::vector<int>> free_button_schedule;
+        std::unordered_set<int> already_constrained;
+
+        for (size_t i = 0; i < schedule.size(); ++i) {
+            auto indicator = schedule[i];
+            std::vector<int> free_buttons;
+            
+            // find buttons for this indicator that are not yet constrained
+            for (auto &button_ind : indicator_to_buttons[indicator]) {
+                if (already_constrained.count(button_ind) == 0) {
+                    free_buttons.push_back(button_ind);
+                }
+            }
+            
+            free_button_schedule.push_back(free_buttons);
+            
+            // mark all buttons for this indicator as now constrained
+            for (auto &button_ind : indicator_to_buttons[indicator]) {
+                already_constrained.insert(button_ind);
+            }
+        }
+
+
         std::cout << "Scheduled indicator/buttons:" << std::endl;
-        for (auto &ind : schedule)
+        for (size_t i = 0; i < schedule.size(); ++i)
         {
-            std::cout << std::to_string(ind) << std::endl;
-            aoc::print_vector(indicator_to_buttons[ind]);
+            std::cout << std::to_string(schedule[i]) << std::endl;
+            aoc::print_vector(indicator_to_buttons[schedule[i]]);
+            aoc::print_vector(free_button_schedule[i]);
         }
         std::cout << "vvvvvv" << std::endl;
         
@@ -508,7 +528,7 @@ public:
             indicator_to_buttons,
             constraints,
             joltage,
-            indicator_to_buttons[schedule[0]],
+            free_button_schedule,
             joltage[schedule[0]]
         );
 
@@ -607,22 +627,22 @@ int main(int argc, char *argv[])
         //     std::cout << row << std::endl;
         // }
 
-        BudgetCombinations combos = BudgetCombinations(4, 3);
+        // BudgetCombinations combos = BudgetCombinations(4, 3);
 
-        while (true)
-        {
-            auto [combos_ended, combo] = combos.next();
+        // while (true)
+        // {
+        //     auto [combos_ended, combo] = combos.next();
 
-            std::string row;
-            for (auto &v : combo)
-            {
-                row += std::to_string(v) + ',';
-            }
-            std::cout << row << std::endl;
+        //     std::string row;
+        //     for (auto &v : combo)
+        //     {
+        //         row += std::to_string(v) + ',';
+        //     }
+        //     std::cout << row << std::endl;
 
-            if (combos_ended)
-                break;
-        }
+        //     if (combos_ended)
+        //         break;
+        // }
 
         auto part1_start = std::chrono::high_resolution_clock::now();
 
