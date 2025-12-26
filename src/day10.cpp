@@ -6,6 +6,7 @@
 #include <numeric>
 #include <chrono>
 #include <unordered_set>
+#include <unordered_map>
 #include <cassert>
 #include "utils.h"
 
@@ -132,7 +133,8 @@ public:
         std::vector<int> res = {current};
 
         auto [ended_remaining, res_remaining] = remaining_combination->next();
-        for (auto &rem : res_remaining) {
+        for (auto &rem : res_remaining)
+        {
             res.push_back(rem);
         }
 
@@ -153,18 +155,147 @@ public:
     }
 };
 
+enum CombinationsStatus {
+    InProgress,
+    EndedOk,
+    EndedError
+};
+
+class BudgetCombinationsWithLimits
+{
+private:
+    std::vector<int> free_indices;
+    std::vector<int> constraints;
+    std::vector<int> llim;
+    std::vector<int> ulim;
+    int budget;
+
+    // this has to be pointer otherwise it complains that the class in not defined
+    std::unique_ptr<BudgetCombinationsWithLimits> next_combinations;
+    std::vector<int> next_free_indices;
+    int current_ind;
+
+public:
+    BudgetCombinationsWithLimits(
+        std::vector<int> free_indices_val,
+        std::vector<int> constraints_val,
+        std::vector<int> llim_val,
+        std::vector<int> ulim_val,
+        int budget_val
+    ) : free_indices(free_indices_val), constraints(constraints_val), llim(llim_val), ulim(ulim_val), budget(budget_val) {
+
+        if (free_indices.size() > 1 && budget > 0) {
+            
+            current_ind = free_indices[0];
+            next_free_indices = std::vector<int>(free_indices.begin() + 1, free_indices.end());
+
+            std::vector<int> next_free_indices(free_indices.begin() + 1, free_indices.end());
+            constraints[current_ind] = std::min(budget, ulim[current_ind]);
+            next_combinations = std::make_unique<BudgetCombinationsWithLimits>(
+                next_free_indices,
+                constraints,
+                llim,
+                ulim,
+                budget - constraints[current_ind]
+            );
+        }
+    }
+
+    std::pair<CombinationsStatus, std::vector<int>> next()
+    {
+        // can have 3 outcomes:
+        // EndedOk: exhausted all combinations but found one valid one
+        // EndedError: exhausted and not found any valid combinations
+        // InProgress: found a valid combination but not exhausted yet
+        
+
+        if (free_indices.size() == 0) {
+            if (budget == 0)
+            {
+                return {EndedOk, constraints};
+            } else {
+                return {EndedError, constraints};
+            }
+        }
+
+        if (free_indices.size() == 1) {
+            if (budget >= llim[free_indices[0]] && budget <= ulim[free_indices[0]]) {
+                auto res = constraints;
+                res[free_indices[0]] = budget;
+                return {EndedOk, res};
+            } else {
+                return {EndedError, constraints};
+            }   
+        }
+
+        if (budget == 0) {
+            auto res = constraints;
+            for (auto &ind : free_indices) {
+                if (llim[ind] > 0) {
+                    return {EndedError, res};
+                } else {
+                    res[ind] = 0;
+                }
+            }
+            return {EndedOk, res};
+        }
+
+        // budget > 0 and free_indices.size() > 1
+
+        auto [next_status, possible_constraints] = next_combinations->next();
+        
+        if (next_status == EndedOk) {
+            if (constraints[current_ind] <= llim[current_ind]) {
+                return {EndedOk, possible_constraints};
+            }
+            else {
+                --constraints[current_ind];
+                
+                next_combinations = std::make_unique<BudgetCombinationsWithLimits>(
+                    next_free_indices,
+                    constraints,
+                    llim,
+                    ulim,
+                    budget - constraints[current_ind]
+                );
+                return {InProgress, possible_constraints};
+            }
+        }
+        
+        if (next_status == InProgress) {
+            return {InProgress, possible_constraints};
+        } 
+
+        if (next_status == EndedError) {
+            if (constraints[current_ind] <= llim[current_ind]) {
+                return {EndedError, possible_constraints};
+            }
+            else {
+                --constraints[current_ind];
+                
+                next_combinations = std::make_unique<BudgetCombinationsWithLimits>(
+                    next_free_indices,
+                    constraints,
+                    llim,
+                    ulim,
+                    budget - constraints[current_ind]
+                );
+                return next();
+            }
+        } 
+    }
+};
+
 bool share_elements(const std::vector<int> &a, const std::vector<int> &b)
 {
-    for (int x : a)
-    {
-        for (int y : b)
-        {
+    for (int x : a) {
+        for (int y : b) {
             if (x == y)
                 return true;
         }
     }
     return false;
-}
+};
 
 class Puzzle
 {
@@ -173,6 +304,7 @@ public:
     std::vector<std::vector<size_t>> buttons;
     std::vector<int> joltage;
     std::string puzzle_str;
+    std::vector<std::vector<int>> indicator_to_buttons;
 
     static Puzzle fromString(const std::string &line)
     {
@@ -224,7 +356,57 @@ public:
             }
         }
 
+        // sort the buttons in terms of how many buttons they affect
+        // in descending order
+        std::sort(puzzle.buttons.begin(), puzzle.buttons.end(),
+                  [](const std::vector<size_t> &a, const std::vector<size_t> &b)
+                  { return a.size() > b.size(); });
+
+        // indicator to button look-up
+        puzzle.indicator_to_buttons = std::vector<std::vector<int>>(puzzle.joltage.size());
+        for (size_t button_ind = 0; button_ind < puzzle.buttons.size(); ++button_ind)
+        {
+            for (auto &indicator : puzzle.buttons[button_ind])
+            {
+                puzzle.indicator_to_buttons[indicator].push_back(button_ind);
+            }
+        }
+
         assert(puzzle.target_lights.size() == puzzle.joltage.size());
+
+        // // Initialize i2b matrix (indicators x buttons)
+        // size_t num_indicators = puzzle.joltage.size();
+        // size_t num_buttons = puzzle.buttons.size();
+        // puzzle.i2b.resize(num_indicators, std::vector<int>(num_buttons, 0));
+
+        // // Fill the matrix: 1 if button affects indicator, 0 otherwise
+        // for (size_t button_ind = 0; button_ind < num_buttons; ++button_ind)
+        // {
+        //     for (auto &indicator : puzzle.buttons[button_ind])
+        //     {
+        //         puzzle.i2b[indicator][button_ind] = 1;
+        //     }
+        // }
+
+        // // Print the matrix
+        // std::cout << "Indicator to Button Matrix:" << std::endl;
+        // std::cout << "   ";
+        // for (size_t b = 0; b < num_buttons; ++b)
+        // {
+        //     std::cout << "B" << b << " ";
+        // }
+        // std::cout << std::endl;
+
+        // for (size_t i = 0; i < num_indicators; ++i)
+        // {
+        //     std::cout << "I" << i << " ";
+        //     for (size_t b = 0; b < num_buttons; ++b)
+        //     {
+        //         std::cout << puzzle.i2b[i][b] << "  ";
+        //     }
+        //     std::cout << std::endl;
+        // }
+        // std::cout << std::endl;
 
         return puzzle;
     }
@@ -268,312 +450,194 @@ public:
         exit(1);
     }
 
-    static bool joltage_exceeded(
-        std::vector<int> &candidate_constraints,
-        std::vector<int> &joltage,
-        std::vector<std::vector<size_t>> &buttons)
+    void get_limits(std::vector<int> &llim, std::vector<int> &ulim)
     {
-        // sanity check
-        std::vector<int> joltage_check(joltage.size(), 0);
-        for (size_t i = 0; i < candidate_constraints.size(); ++i)
+
+        // std::cout << "starting limits" << std::endl;
+        // aoc::print_vector(llim);
+        // aoc::print_vector(ulim);
+
+        bool updated = true;
+        while (updated)
         {
-            auto presses = candidate_constraints[i];
-            if (presses > 0)
+            updated = false;
+
+            // ll
+            for (size_t i = 0; i < indicator_to_buttons.size(); ++i)
             {
-                auto button = buttons[i];
-                while (presses > 0)
+                auto button_inds = indicator_to_buttons[i];
+                // only update those that start at start_ind
+                for (size_t j = 0; j < button_inds.size(); ++j)
                 {
-                    --presses;
-                    for (auto &ind : button)
+                    int this_ll = joltage[i];
+                    for (size_t k = 0; k < button_inds.size(); ++k)
                     {
-                        ++joltage_check[ind];
+                        if (k != j)
+                        {
+                            this_ll -= ulim[button_inds[k]];
+                        }
+                    }
+                    if (this_ll > llim[button_inds[j]] && this_ll <= ulim[button_inds[j]])
+                    {
+                        llim[button_inds[j]] = this_ll;
+                        updated = true;
+                    }
+
+                }
+            }
+
+            // ul
+            for (size_t i = 0; i < indicator_to_buttons.size(); ++i)
+            {
+                auto button_inds = indicator_to_buttons[i];
+                for (size_t j = 0; j < button_inds.size(); ++j)
+                {
+                    int other_ll_total = 0;
+                    for (size_t k = 0; k < button_inds.size(); ++k)
+                    {
+                        if (k != j)
+                        {
+                            other_ll_total += llim[button_inds[k]];
+                        }
+                    }
+                    auto candidate_ul = joltage[i] - other_ll_total;
+                    if (candidate_ul < ulim[button_inds[j]] && candidate_ul >= llim[button_inds[j]])
+                    {
+                        ulim[button_inds[j]] = candidate_ul;
+                        updated = true;
                     }
                 }
             }
         }
 
-        for (size_t i = 0; i < joltage.size(); ++i)
-        {
-            if (joltage_check[i] > joltage_check[i])
-            {
-                return true;
+        for (size_t t = 0; t < llim.size(); ++t) {
+            if (llim[t] > ulim[t]) {
+                std::cerr << "limits bad" << std::endl;
             }
         }
-        return false;
+
+        // std::cout << "updated limits" << std::endl;
+        // aoc::print_vector(button_ll);
+        // aoc::print_vector(button_ul);
     }
 
-    static std::pair<bool, std::vector<std::vector<int>>> joltage_search(
-        const int &schedule_position,
-        std::vector<int> &schedule,
-        std::vector<std::vector<int>> &indicator_to_buttons,
-        std::vector<int> &constraints,
-        std::vector<int> &joltage,
-        std::vector<std::vector<int>> &free_button_schedule,
-        int &target_joltage)
-    {
-        auto free_button_inds = free_button_schedule[schedule_position];
+    int presses_search(
+        int button_ind, 
+        std::vector<int> presses, 
+        std::vector<int> &joltage_budget, 
+        std::vector<int> &llim, 
+        std::vector<int> &ulim
+    ) {
 
-        // std::cout << "Incoming constraints (indicator " + std::to_string(indicator) + "):" << std::endl;
-        // aoc::print_vector(constraints);
-        auto is_last_node = schedule_position == static_cast<int>(schedule.size()) - 1;
-        if (is_last_node)
-        {
-            auto res = constraints;
-            for (auto &button_ind : free_button_inds)
-            {
-                res[button_ind] = 0;
-            }
-            // we can freely distribute the unattributed_joltage to the remaining free buttons
-            // assign all of it to the the first free button
-            if (free_button_inds.size() > 0)
-                res[free_button_inds[0]] = target_joltage;
+        for (int press_candidate = ulim[button_ind]; press_candidate >= llim[button_ind]; --press_candidate) {
+            // if (button_ind == 0)
+            //     std::cout << "Button index 0, " + std::to_string(press_candidate) << std::endl;
+            // std::cout << "Button index " + std::to_string(button_ind) << std::endl;
+            // aoc::print_vector(buttons[button_ind]);
+            // aoc::print_vector(joltage_budget);
+            // aoc::print_vector(presses);
 
-            return {true, {res}};
-        }
+            auto candidate_joltage_budget = joltage_budget;
 
-        // we are not at the last node from here on
+            bool budget_ok = true;
 
-        auto next_indicator = schedule[schedule_position + 1];
-        auto next_free_button_inds = free_button_schedule[schedule_position + 1];
-
-        // collect all solutions
-        std::vector<std::vector<int>> solutions = {};
-
-        // candidate constraints
-        BudgetCombinations combinations = BudgetCombinations(free_button_inds.size(), target_joltage);
-
-        bool loop_control = true;
-        while (loop_control)
-        {
-            auto [combinations_ended, combination] = combinations.next();
-            loop_control = !combinations_ended;
-
-            auto candidate_constraints = constraints;
-            for (size_t i = 0; i < free_button_inds.size(); ++i)
-            {
-                candidate_constraints[free_button_inds[i]] = combination[i];
-            }
-
-            auto next_target_joltage = joltage[next_indicator];
-            for (auto &button_ind : indicator_to_buttons[next_indicator])
-            {
-                if (candidate_constraints[button_ind] > 0)
-                {
-                    next_target_joltage -= candidate_constraints[button_ind];
+            for (auto &indicator : buttons[button_ind]) {
+                if (candidate_joltage_budget[indicator] >= press_candidate) {
+                    candidate_joltage_budget[indicator] -= press_candidate;
+                } else {
+                    budget_ok = false;
+                    break;
                 }
             }
 
-            // skip search if target is negative or no free button to satisfy a positive target
-            if ((next_target_joltage < 0) || (next_target_joltage > 0 && next_free_button_inds.size() == 0)) {
-                continue;
-            }
+            if (budget_ok) {
+                presses[button_ind] = press_candidate;
+                // std::cout << "ok" << std::endl;
+                // aoc::print_vector(presses);
+                // aoc::print_vector(candidate_joltage_budget);
 
-            // std::cout << "Candidate constraints (indicator " + std::to_string(indicator) + "):" << std::endl;
-            // aoc::print_vector(candidate_constraints);
-            auto [success, iteration_solutions] = joltage_search(
-                schedule_position + 1,
-                schedule,
-                indicator_to_buttons,
-                candidate_constraints,
-                joltage,
-                free_button_schedule,
-                next_target_joltage
-            );
+                // if this was last button
+                if (button_ind == static_cast<int>(buttons.size() - 1)) {
+                    auto total_budget = std::accumulate(candidate_joltage_budget.begin(), 
+                        candidate_joltage_budget.end(), 0);
+                    // std::cout << "last, " + std::to_string(total_budget) << std::endl;
+                    if (total_budget == 0) {
+                        // std::cout << "final presses" << std::endl;
+                        // aoc::print_vector(presses);
+                        return std::accumulate(presses.begin(), presses.end(), 0);;
+                    } else {
+                        // std::cout << "-1" << std::endl;
+                        return -1;
+                    }
+                } 
 
-            if (success)
-            {
-                for (auto &solution : iteration_solutions)
-                {
-                    solutions.push_back(solution);
-                    // std::cout << "solution found: " << std::endl;
-                    // aoc::print_vector(solution);
+                // more buttons to press
+
+                // review the limits as we have already fixed one or more buttons
+                auto next_llim = llim;
+                auto next_ulim = ulim;
+                for (int i = 0; i <= button_ind; ++i) {
+                    next_llim[i] = presses[i];
+                    next_ulim[i] = presses[i];
                 }
-                // return on first solution found
-                break;
-            }
+                get_limits(next_llim, next_ulim);
 
-            // else {
-            //     std::cout << "Surge! Preemptive check!" << std::endl;
-            // }
+                auto search_res = presses_search(button_ind + 1, presses, candidate_joltage_budget, next_llim, next_ulim);
+                
+                // if valid solution found return
+                if (search_res >= 0) {
+                    return search_res;
+                }
+
+                // if got to the end of the range
+                if (press_candidate == llim[button_ind]) {
+                    return search_res;
+                }
+
+                // else try next press_candidate
+                // std::cout << std::to_string(limits_ok) << std::endl;
+            }
         }
 
-        return {solutions.size() > 0, solutions};
+        // std::cout << button_ind << std::endl;
+        // aoc::print_vector(llim);
+        // aoc::print_vector(ulim);
+        // aoc::print_vector(presses);
+        // std::cerr << "should not be here!" << std::endl;
+        // exit(1);
+        return -1;
     }
 
-    int solve_part2()
-    {
-        // we'll traverse a graph where each node is an indicator
-        // every indicator is associated with one or more buttons
-        // the count of buttons per indicator defines where the nodes (indicators) are in the graph traversal schedule
-        // the nodes (indicators) with fewer associated buttons must be visited first
-        // we propagate any constraints as we traverse the graph; constraints are candidate number of presses for a specific button
-        // at every node, taking into the account the constraints, we generate candidate number of presses for the unconstrained buttons
-        // these come as a list of candidates which all should be iterated over
-        // generated candidates must also comply with another constraint, the target joltage for the node (indicator)
-        // each transition carries all the constraints, even for the button not associated with the node
-        // if any of the nodes cannot generate candidate numbers for the unconstrained buttons
-        // if we reach the final node and a valid candidate can be created we record the number of button presses and stop?
-
+    int solve_part2_alternative() {
+        
         std::cout << puzzle_str << std::endl;
 
+        std::vector<int> llim(buttons.size(), 0);
+        std::vector<int> ulim(buttons.size(), std::numeric_limits<int>::max());
+
+        for (size_t i = 0; i < indicator_to_buttons.size(); ++i)
+        {
+            for (auto &button_ind : indicator_to_buttons[i])
+            {
+                if (ulim[button_ind] > joltage[i])
+                {
+                    ulim[button_ind] = joltage[i];
+                }
+            }
+        }
+
+        get_limits(llim, ulim);
+
         // -1 means it's still unconstrained
-        std::vector<int> constraints(buttons.size(), -1);
+        std::vector<int> presses(buttons.size(), 0);
 
-        // rearrange buttons so that the ones associates with most indicators are first
-        // these buttons are associated with fewer presses overall so it's worth
-        // pressing them first
-        std::sort(buttons.begin(), buttons.end(), [](const std::vector<size_t> &a, const std::vector<size_t> &b)
-                  { return a.size() > b.size(); });
+        // assume buttons are ranked in term of how many indicators they affect, in descending order
 
-        // indicator to button look-up
-        std::vector<std::vector<int>> indicator_to_buttons(joltage.size());
-        for (size_t button_ind = 0; button_ind < buttons.size(); ++button_ind)
-        {
-            for (auto &indicator : buttons[button_ind])
-            {
-                indicator_to_buttons[indicator].push_back(button_ind);
-            }
-        }
+        auto min_presses = presses_search(0, presses, joltage, llim, ulim);
+        std::cout << "solution found: " + std::to_string(min_presses) << std::endl;
 
-        std::vector<int> schedule(joltage.size());
-        for (size_t i = 0; i < schedule.size(); ++i)
-        {
-            schedule[i] = i;
-        }
+        return min_presses;
 
-        // schedule based on indicator_to_buttons (i.e. how many buttons are associated with indicator)
-        std::sort(schedule.begin(), schedule.end(),
-                  [&indicator_to_buttons](size_t i1, size_t i2)
-                  { return indicator_to_buttons[i1].size() < indicator_to_buttons[i2].size(); });
-
-        // attempt to optimise the schedule so that the subsequent indicator
-        // has the fewest new buttons with respect to constrained_buttons set
-        std::unordered_set<int> constrained_buttons;
-        for (size_t i = 0; i < schedule.size() - 1; ++i)
-        {
-            for (auto &button_ind : indicator_to_buttons[schedule[i]])
-            {
-                constrained_buttons.insert(button_ind);
-            }
-
-            // find the indicator with the fewest new buttons with respect to constrained_buttons set
-            int fewest_new_buttons = std::numeric_limits<int>::max();
-            size_t best_position = i + 1;
-
-            // look through remaining indicators
-            for (size_t j = i + 1; j < schedule.size(); ++j)
-            {
-                auto &candidate_buttons = indicator_to_buttons[schedule[j]];
-
-                // count how many buttons are not in constrained_buttons (i.e., new buttons)
-                int new_button_count = 0;
-                for (auto &button_ind : candidate_buttons)
-                {
-                    if (constrained_buttons.count(button_ind) == 0)
-                    {
-                        ++new_button_count;
-                    }
-                }
-
-                if (new_button_count < fewest_new_buttons)
-                {
-                    fewest_new_buttons = new_button_count;
-                    best_position = j;
-                }
-            }
-
-            // swap the best candidate to position i+1
-            if (best_position != i + 1)
-            {
-                std::swap(schedule[i + 1], schedule[best_position]);
-            }
-        }
-
-        // we can precompute what buttons will be free at every node (indicator)
-        std::vector<std::vector<int>> free_button_schedule;
-        std::unordered_set<int> already_constrained;
-
-        for (size_t i = 0; i < schedule.size(); ++i) {
-            auto indicator = schedule[i];
-            std::vector<int> free_buttons;
-            
-            // find buttons for this indicator that are not yet constrained
-            for (auto &button_ind : indicator_to_buttons[indicator]) {
-                if (already_constrained.count(button_ind) == 0) {
-                    free_buttons.push_back(button_ind);
-                }
-            }
-            
-            free_button_schedule.push_back(free_buttons);
-            
-            // mark all buttons for this indicator as now constrained
-            for (auto &button_ind : indicator_to_buttons[indicator]) {
-                already_constrained.insert(button_ind);
-            }
-        }
-
-
-        std::cout << "Scheduled indicator/buttons:" << std::endl;
-        for (size_t i = 0; i < schedule.size(); ++i)
-        {
-            std::cout << std::to_string(schedule[i]) << std::endl;
-            aoc::print_vector(indicator_to_buttons[schedule[i]]);
-            aoc::print_vector(free_button_schedule[i]);
-        }
-        std::cout << "vvvvvv" << std::endl;
-        
-        auto [success, solutions] = joltage_search(
-            0,
-            schedule,
-            indicator_to_buttons,
-            constraints,
-            joltage,
-            free_button_schedule,
-            joltage[schedule[0]]
-        );
-
-        if (success)
-        {
-            int min_presses = std::numeric_limits<int>::max();
-            for (auto &solution : solutions)
-            {
-                // std::string row = "solution found: ";
-                // for (auto &el : solution) {
-                //     row += std::to_string(el) + ',';
-                // }
-                // std::cout << row << std::endl;
-
-                // // sanity check
-                // std::vector<int> joltage_check(joltage.size(), 0);
-                // for (size_t i = 0; i < solution.size(); ++i) {
-                //     auto presses = solution[i];
-                //     auto button = buttons[i];
-                //     while (presses > 0) {
-                //         --presses;
-                //         for (auto &ind : button) {
-                //             ++joltage_check[ind];
-                //         }
-                //     }
-                // }
-                // std::cout << "joltage_check" << std::endl;
-                // aoc::print_vector(joltage_check);
-                // std::cout << "wanted joltage" << std::endl;
-                // aoc::print_vector(joltage);
-                // std::cout << "=========" << std::endl;
-
-                auto presses = std::accumulate(solution.begin(), solution.end(), 0);
-                if (presses < min_presses)
-                    min_presses = presses;
-
-                std::cout << "solution found: " + std::to_string(presses) << std::endl;
-            }
-            return min_presses;
-        }
-        else
-        {
-            std::cerr << "Solution not found." << std::endl;
-            exit(1);
-        }
     }
 };
 
@@ -590,7 +654,7 @@ ll solve_all(std::vector<Puzzle> &puzzles, bool part1)
         {
             auto start = std::chrono::high_resolution_clock::now();
 
-            res += puzzle.solve_part2();
+            res += puzzle.solve_part2_alternative();
             auto end = std::chrono::high_resolution_clock::now();
 
             std::chrono::duration<double> part1_elapsed = end - start;
@@ -599,7 +663,7 @@ ll solve_all(std::vector<Puzzle> &puzzles, bool part1)
         }
     }
     return res;
-}
+};
 
 int main(int argc, char *argv[])
 {
@@ -669,4 +733,4 @@ int main(int argc, char *argv[])
     }
 
     return 0;
-}
+};
